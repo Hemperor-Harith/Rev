@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import requests
 import os
+import json
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -15,7 +16,6 @@ def generate_plan():
     today = datetime.now()
     today_str = today.strftime("%A %d %B %Y")
     
-    # Build subject list from form data
     subjects_raw = data.get('subjects', '')
     confidence_raw = data.get('confidence', '')
     exam_dates_raw = data.get('exam_dates', '')
@@ -29,7 +29,7 @@ TODAY'S DATE AND TIME CONTEXT:
 - Today is {today_str}
 - Use this to calculate exactly how many days remain until each exam
 - Calculate which days of the week fall on which dates yourself
-- Never revise on: {data.get('unavailable_days', 'Wednesday')}
+- Never revise on: {data.get('unavailable_days', 'None')}
 - Stop the revision plan the day before exams begin
 - In the final 3 days before each exam, only revise that subject lightly
 
@@ -82,11 +82,26 @@ SCHEDULING RULES:
     )
 
     result = response.json()
-    plan = result["choices"][0]["message"]["content"]
-    
+    raw_content = result["choices"][0]["message"]["content"]
+
+    # Clean and parse the JSON plan
+    clean = raw_content.strip()
+    if clean.startswith("```"):
+        clean = clean.split("```")[1]
+        if clean.startswith("json"):
+            clean = clean[4:]
+    clean = clean.strip()
+
+    try:
+        plan_json = json.loads(clean)
+        plan_text = json.dumps(plan_json)
+    except Exception:
+        plan_json = {}
+        plan_text = raw_content
+
     return jsonify({
         "status": "success",
-        "plan": plan,
+        "plan": plan_text,
         "student_name": data.get('name', 'Student'),
         "student_email": data.get('email', '')
     })
