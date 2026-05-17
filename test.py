@@ -9,6 +9,31 @@ load_dotenv()
 
 app = Flask(__name__)
 
+def format_plan_for_email(plan_json, student_name):
+    output = f"Hi {student_name}! Here is your personalised revision plan:\n\n"
+    output += "=" * 50 + "\n\n"
+    
+    for day in plan_json.get("plan", []):
+        output += f"📅 {day['day'].upper()} {day['date']}\n"
+        
+        if day.get("rest_day"):
+            output += "🌟 REST DAY — No revision today. Rest is part of the plan.\n\n"
+            continue
+        
+        output += f"Total revision time: {day['total_mins']} mins\n\n"
+        
+        for i, session in enumerate(day.get("sessions", []), 1):
+            output += f"SESSION {i} — {session['subject']} — {session['duration_mins']} mins\n"
+            output += f"📖 Topic: {session['topic']}\n"
+            output += f"🛠 Technique: {session['technique']}\n"
+            output += f"📝 Instructions: {session['instructions']}\n"
+            output += f"💡 Why this works for you: {session['why_it_works']}\n\n"
+        
+        output += f"✨ {day['encouragement']}\n"
+        output += "-" * 50 + "\n\n"
+    
+    return output
+
 @app.route('/generate-plan', methods=['POST'])
 def generate_plan():
     data = request.json
@@ -60,7 +85,8 @@ SCHEDULING RULES:
 - Prioritise low confidence subjects with early exam dates most urgently
 - Sessions must never exceed 45 minutes each
 - Maximum 90 minutes total revision per day
-- Never same subject on consecutive days unless Chinese in week one
+- Never same subject on consecutive days unless it is the weakest 
+  subject in week one
 - Day before each exam: only that subject, light recall, finish by 7pm
 - Exam morning: 15 minute confidence session only
 """
@@ -94,14 +120,16 @@ SCHEDULING RULES:
 
     try:
         plan_json = json.loads(clean)
-        plan_text = json.dumps(plan_json)
+        formatted_plan = format_plan_for_email(plan_json, data.get('name', 'Student'))
+        plan_store = json.dumps(plan_json)
     except Exception:
-        plan_json = {}
-        plan_text = raw_content
+        formatted_plan = raw_content
+        plan_store = raw_content
 
     return jsonify({
         "status": "success",
-        "plan": plan_text,
+        "plan": formatted_plan,
+        "plan_json": plan_store,
         "student_name": data.get('name', 'Student'),
         "student_email": data.get('email', '')
     })
