@@ -4,6 +4,10 @@ import os
 import json
 from datetime import datetime
 from dotenv import load_dotenv
+from flask_cors import CORS
+CORS(app)
+
+
 
 load_dotenv()
 

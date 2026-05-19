@@ -2,3 +2,7 @@ anthropic
 python-dotenv
 requests
 flask
+flask
+flask-cors
+requests
+python-dotenv
