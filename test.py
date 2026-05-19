@@ -39,20 +39,52 @@ def format_plan_for_email(plan_json, student_name):
     
     return output
 
+def send_email(to_email, student_name, plan_text):
+    response = requests.post(
+        "https://api.resend.com/emails",
+        headers={
+            "Authorization": f"Bearer {os.getenv('RESEND_API_KEY')}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "from": "PlanMyRevision <onboarding@resend.dev>",
+            "to": [to_email],
+            "subject": f"📚 Your Personalised Revision Plan, {student_name}!",
+            "text": plan_text
+        }
+    )
+    return response.status_code == 200
+
+def save_to_sheet(student_name, email, reminders, plan_text):
+    sheet_url = os.getenv('SHEET_WEBHOOK_URL', '')
+    if not sheet_url:
+        return
+    try:
+        requests.post(sheet_url, json={
+            "name": student_name,
+            "email": email,
+            "reminders": reminders,
+            "plan": plan_text,
+            "date": datetime.now().strftime("%Y-%m-%d")
+        }, timeout=5)
+    except Exception:
+        pass
+
 @app.route('/generate-plan', methods=['POST'])
 def generate_plan():
     data = request.json
-    
+
     today = datetime.now()
     today_str = today.strftime("%A %d %B %Y")
-    
+
     subjects_raw = clean(data.get('subjects', ''))
-    confidence_raw = clean(data.get('confidence', ''))
-    exam_dates_raw = clean(data.get('exam_dates', ''))
-    
+    student_name = clean(data.get('name', 'Student'))
+    student_email = clean(data.get('email', ''))
+    reminders = clean(data.get('reminders', 'no'))
+
     with open("prompt.txt", "r") as f:
         base_prompt = f.read()
-    
+
     full_prompt = f"""{base_prompt}
 
 TODAY'S DATE AND TIME CONTEXT:
@@ -64,12 +96,12 @@ TODAY'S DATE AND TIME CONTEXT:
 - In the final 3 days before each exam, only revise that subject lightly
 
 STUDENT PROFILE:
-- Name: {clean(data.get('name', 'Student'))}
+- Name: {student_name}
 - Year: {clean(data.get('year', 'Year 10'))}
 - Exams begin: {clean(data.get('exam_start', 'Unknown'))}
 - Daily time available: {clean(data.get('daily_hours', '1-2 hours'))}
 - Session preference: {clean(data.get('session_style', 'Mixed'))}
-- Reminders: {clean(data.get('reminders', 'No'))}
+- Reminders: {reminders}
 
 SUBJECTS, CONFIDENCE RATINGS AND EXAM DATES:
 {subjects_raw}
@@ -119,18 +151,23 @@ SCHEDULING RULES:
 
     try:
         plan_json = json.loads(clean_content)
-        formatted_plan = format_plan_for_email(plan_json, data.get('name', 'Student'))
+        formatted_plan = format_plan_for_email(plan_json, student_name)
         plan_store = json.dumps(plan_json)
     except Exception:
         formatted_plan = raw_content
         plan_store = raw_content
 
+    if student_email:
+        send_email(student_email, student_name, formatted_plan)
+
+    save_to_sheet(student_name, student_email, reminders, plan_store)
+
     return jsonify({
         "status": "success",
         "plan": formatted_plan,
         "plan_json": plan_store,
-        "student_name": clean(data.get('name', 'Student')),
-        "student_email": clean(data.get('email', ''))
+        "student_name": student_name,
+        "student_email": student_email
     })
 
 @app.route('/health', methods=['GET'])
