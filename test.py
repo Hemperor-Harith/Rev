@@ -9,6 +9,11 @@ load_dotenv()
 
 app = Flask(__name__)
 
+def clean(val):
+    if not val:
+        return ''
+    return str(val).replace('\n', ' ').replace('\r', ' ').strip()
+
 def format_plan_for_email(plan_json, student_name):
     output = f"Hi {student_name}! Here is your personalised revision plan:\n\n"
     output += "=" * 50 + "\n\n"
@@ -41,9 +46,9 @@ def generate_plan():
     today = datetime.now()
     today_str = today.strftime("%A %d %B %Y")
     
-    subjects_raw = data.get('subjects', '')
-    confidence_raw = data.get('confidence', '')
-    exam_dates_raw = data.get('exam_dates', '')
+    subjects_raw = clean(data.get('subjects', ''))
+    confidence_raw = clean(data.get('confidence', ''))
+    exam_dates_raw = clean(data.get('exam_dates', ''))
     
     with open("prompt.txt", "r") as f:
         base_prompt = f.read()
@@ -54,38 +59,33 @@ TODAY'S DATE AND TIME CONTEXT:
 - Today is {today_str}
 - Use this to calculate exactly how many days remain until each exam
 - Calculate which days of the week fall on which dates yourself
-- Never revise on: {data.get('unavailable_days', 'None')}
+- Never revise on: {clean(data.get('unavailable_days', 'None'))}
 - Stop the revision plan the day before exams begin
 - In the final 3 days before each exam, only revise that subject lightly
 
 STUDENT PROFILE:
-- Name: {data.get('name', 'Student')}
-- Year: {data.get('year', 'Year 10')}
-- Exams begin: {data.get('exam_start', 'Unknown')}
-- Daily time available: {data.get('daily_hours', '1-2 hours')}
-- Session preference: {data.get('session_style', 'Mixed')}
+- Name: {clean(data.get('name', 'Student'))}
+- Year: {clean(data.get('year', 'Year 10'))}
+- Exams begin: {clean(data.get('exam_start', 'Unknown'))}
+- Daily time available: {clean(data.get('daily_hours', '1-2 hours'))}
+- Session preference: {clean(data.get('session_style', 'Mixed'))}
+- Reminders: {clean(data.get('reminders', 'No'))}
 
-SUBJECTS AND CONFIDENCE:
+SUBJECTS, CONFIDENCE RATINGS AND EXAM DATES:
 {subjects_raw}
 
-CONFIDENCE RATINGS:
-{confidence_raw}
-
-EXAM DATES PER SUBJECT:
-{exam_dates_raw}
-
 ADDITIONAL CONTEXT:
-- Distractions: {data.get('distractions', 'Various')}
-- Sleep: {data.get('sleep', 'Unknown')}
-- Prior techniques: {data.get('prior_techniques', 'None')}
-- Additional notes: {data.get('notes', 'None')}
+- Distractions: {clean(data.get('distractions', 'Various'))}
+- Sleep: {clean(data.get('sleep', 'Unknown'))}
+- Prior techniques: {clean(data.get('prior_techniques', 'None'))}
+- Additional notes: {clean(data.get('notes', 'None'))}
 
 SCHEDULING RULES:
 - Calculate exact days remaining until each exam from today
 - Prioritise low confidence subjects with early exam dates most urgently
 - Sessions must never exceed 45 minutes each
 - Maximum 90 minutes total revision per day
-- Never same subject on consecutive days unless it is the weakest 
+- Never same subject on consecutive days unless it is the weakest
   subject in week one
 - Day before each exam: only that subject, light recall, finish by 7pm
 - Exam morning: 15 minute confidence session only
@@ -110,16 +110,15 @@ SCHEDULING RULES:
     result = response.json()
     raw_content = result["choices"][0]["message"]["content"]
 
-    # Clean and parse the JSON plan
-    clean = raw_content.strip()
-    if clean.startswith("```"):
-        clean = clean.split("```")[1]
-        if clean.startswith("json"):
-            clean = clean[4:]
-    clean = clean.strip()
+    clean_content = raw_content.strip()
+    if clean_content.startswith("```"):
+        clean_content = clean_content.split("```")[1]
+        if clean_content.startswith("json"):
+            clean_content = clean_content[4:]
+    clean_content = clean_content.strip()
 
     try:
-        plan_json = json.loads(clean)
+        plan_json = json.loads(clean_content)
         formatted_plan = format_plan_for_email(plan_json, data.get('name', 'Student'))
         plan_store = json.dumps(plan_json)
     except Exception:
@@ -130,8 +129,8 @@ SCHEDULING RULES:
         "status": "success",
         "plan": formatted_plan,
         "plan_json": plan_store,
-        "student_name": data.get('name', 'Student'),
-        "student_email": data.get('email', '')
+        "student_name": clean(data.get('name', 'Student')),
+        "student_email": clean(data.get('email', ''))
     })
 
 @app.route('/health', methods=['GET'])
