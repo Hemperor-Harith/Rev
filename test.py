@@ -102,7 +102,7 @@ STUDENT PROFILE:
 - Year: {clean(data.get('year', 'Year 10'))}
 - Exams begin: {clean(data.get('exam_start', 'Unknown'))}
 - Daily time available: {clean(data.get('daily_hours', '1-2 hours'))}
-- Session preference: {clean(data.get('session_style', 'Mixed')}
+- Session preference: {clean(data.get('session_style', 'Mixed'))}
 - Reminders: {reminders}
 
 SUBJECTS, CONFIDENCE RATINGS AND EXAM DATES:
@@ -179,3 +179,4 @@ def health():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+    
