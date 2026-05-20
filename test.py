@@ -5,13 +5,11 @@ import json
 from datetime import datetime
 from dotenv import load_dotenv
 from flask_cors import CORS
-CORS(app)
-
-
 
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app)
 
 def clean(val):
     if not val:
@@ -104,7 +102,7 @@ STUDENT PROFILE:
 - Year: {clean(data.get('year', 'Year 10'))}
 - Exams begin: {clean(data.get('exam_start', 'Unknown'))}
 - Daily time available: {clean(data.get('daily_hours', '1-2 hours'))}
-- Session preference: {clean(data.get('session_style', 'Mixed'))}
+- Session preference: {clean(data.get('session_style', 'Mixed')}
 - Reminders: {reminders}
 
 SUBJECTS, CONFIDENCE RATINGS AND EXAM DATES:
