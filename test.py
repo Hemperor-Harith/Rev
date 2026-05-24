@@ -19,26 +19,20 @@ def clean(val):
 def format_plan_for_email(plan_json, student_name):
     output = f"Hi {student_name}! Here is your personalised revision plan:\n\n"
     output += "=" * 50 + "\n\n"
-    
     for day in plan_json.get("plan", []):
         output += f"📅 {day['day'].upper()} {day['date']}\n"
-        
         if day.get("rest_day"):
             output += "🌟 REST DAY — No revision today. Rest is part of the plan.\n\n"
             continue
-        
         output += f"Total revision time: {day['total_mins']} mins\n\n"
-        
         for i, session in enumerate(day.get("sessions", []), 1):
             output += f"SESSION {i} — {session['subject']} — {session['duration_mins']} mins\n"
             output += f"📖 Topic: {session['topic']}\n"
             output += f"🛠 Technique: {session['technique']}\n"
             output += f"📝 Instructions: {session['instructions']}\n"
             output += f"💡 Why this works for you: {session['why_it_works']}\n\n"
-        
         output += f"✨ {day['encouragement']}\n"
         output += "-" * 50 + "\n\n"
-    
     return output
 
 def send_email(to_email, student_name, plan_text):
@@ -63,10 +57,8 @@ def save_to_sheet(student_name, email, reminders, plan_text):
         return
     try:
         requests.post(sheet_url, json={
-            "name": student_name,
-            "email": email,
-            "reminders": reminders,
-            "plan": plan_text,
+            "name": student_name, "email": email,
+            "reminders": reminders, "plan": plan_text,
             "date": datetime.now().strftime("%Y-%m-%d")
         }, timeout=5)
     except Exception:
@@ -75,10 +67,8 @@ def save_to_sheet(student_name, email, reminders, plan_text):
 @app.route('/generate-plan', methods=['POST'])
 def generate_plan():
     data = request.json
-
     today = datetime.now()
     today_str = today.strftime("%A %d %B %Y")
-
     subjects_raw = clean(data.get('subjects', ''))
     student_name = clean(data.get('name', 'Student'))
     student_email = clean(data.get('email', ''))
@@ -119,8 +109,7 @@ SCHEDULING RULES:
 - Prioritise low confidence subjects with early exam dates most urgently
 - Sessions must never exceed 45 minutes each
 - Maximum 90 minutes total revision per day
-- Never same subject on consecutive days unless it is the weakest
-  subject in week one
+- Never same subject on consecutive days unless it is the weakest subject in week one
 - Day before each exam: only that subject, light recall, finish by 7pm
 - Exam morning: 15 minute confidence session only
 """
@@ -143,7 +132,6 @@ SCHEDULING RULES:
 
     result = response.json()
     raw_content = result["choices"][0]["message"]["content"]
-
     clean_content = raw_content.strip()
     if clean_content.startswith("```"):
         clean_content = clean_content.split("```")[1]
@@ -179,4 +167,3 @@ def health():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-    
