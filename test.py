@@ -17,23 +17,26 @@ def clean(val):
     return str(val).replace('\n', ' ').replace('\r', ' ').strip()
 
 def format_plan_for_email(plan_json, student_name):
-    output = f"Hi {student_name}! Here is your personalised revision plan:\n\n"
-    output += "=" * 50 + "\n\n"
-    for day in plan_json.get("plan", []):
-        output += f"📅 {day['day'].upper()} {day['date']}\n"
-        if day.get("rest_day"):
-            output += "🌟 REST DAY — No revision today. Rest is part of the plan.\n\n"
-            continue
-        output += f"Total revision time: {day['total_mins']} mins\n\n"
-        for i, session in enumerate(day.get("sessions", []), 1):
-            output += f"SESSION {i} — {session['subject']} — {session['duration_mins']} mins\n"
-            output += f"📖 Topic: {session['topic']}\n"
-            output += f"🛠 Technique: {session['technique']}\n"
-            output += f"📝 Instructions: {session['instructions']}\n"
-            output += f"💡 Why this works for you: {session['why_it_works']}\n\n"
-        output += f"✨ {day['encouragement']}\n"
-        output += "-" * 50 + "\n\n"
-    return output
+    try:
+        output = f"Hi {student_name}! Here is your personalised revision plan:\n\n"
+        output += "=" * 50 + "\n\n"
+        for day in plan_json.get("plan", []):
+            output += f"📅 {day['day'].upper()} {day['date']}\n"
+            if day.get("rest_day"):
+                output += "🌟 REST DAY — No revision today. Rest is part of the plan.\n\n"
+                continue
+            output += f"Total revision time: {day['total_mins']} mins\n\n"
+            for i, session in enumerate(day.get("sessions", []), 1):
+                output += f"SESSION {i} — {session['subject']} — {session['duration_mins']} mins\n"
+                output += f"📖 Topic: {session['topic']}\n"
+                output += f"🛠 Technique: {session['technique']}\n"
+                output += f"📝 Instructions: {session['instructions']}\n"
+                output += f"💡 Why this works for you: {session['why_it_works']}\n\n"
+            output += f"✨ {day['encouragement']}\n"
+            output += "-" * 50 + "\n\n"
+        return output
+    except Exception as e:
+        return f"Plan generated but formatting failed: {e}\n\nRaw data: {json.dumps(plan_json)}"
 
 def send_email(to_email, student_name, plan_text):
     response = requests.post(
@@ -132,22 +135,35 @@ SCHEDULING RULES:
 
     result = response.json()
     raw_content = result["choices"][0]["message"]["content"]
+
+    # Clean up markdown code blocks if present
     clean_content = raw_content.strip()
-    if clean_content.startswith("```"):
-        clean_content = clean_content.split("```")[1]
-        if clean_content.startswith("json"):
-            clean_content = clean_content[4:]
+    if "```" in clean_content:
+        parts = clean_content.split("```")
+        for part in parts:
+            part = part.strip()
+            if part.startswith("json"):
+                part = part[4:].strip()
+            if part.startswith("{"):
+                clean_content = part
+                break
+
     clean_content = clean_content.strip()
+
+    # Try to parse as JSON and format nicely
+    formatted_plan = None
+    plan_store = raw_content
 
     try:
         plan_json = json.loads(clean_content)
         formatted_plan = format_plan_for_email(plan_json, student_name)
         plan_store = json.dumps(plan_json)
     except Exception:
+        # JSON parsing failed - send raw content but clean it up a bit
         formatted_plan = raw_content
-        plan_store = raw_content
 
-    if student_email:
+    # Send email
+    if student_email and formatted_plan:
         send_email(student_email, student_name, formatted_plan)
 
     save_to_sheet(student_name, student_email, reminders, plan_store)
