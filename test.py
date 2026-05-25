@@ -38,7 +38,31 @@ def format_plan_for_email(plan_json, student_name):
     except Exception as e:
         return f"Plan generated but formatting failed: {e}\n\nRaw data: {json.dumps(plan_json)}"
 
-def send_email(to_email, student_name, plan_text):
+def format_todays_sessions(day, student_name):
+    try:
+        if day.get("rest_day"):
+            return f"Hi {student_name}! 🌟 Today is your rest day. No revision — rest is part of the plan. See you tomorrow!"
+
+        output = f"Hi {student_name}! Here are your revision sessions for today:\n\n"
+        output += f"📅 {day['day'].upper()} {day['date']}\n"
+        output += f"Total revision time: {day['total_mins']} mins\n\n"
+        output += "=" * 50 + "\n\n"
+
+        for i, session in enumerate(day.get("sessions", []), 1):
+            output += f"SESSION {i} — {session['subject']} — {session['duration_mins']} mins\n"
+            output += f"📖 Topic: {session['topic']}\n"
+            output += f"🛠 Technique: {session['technique']}\n"
+            output += f"📝 Instructions: {session['instructions']}\n"
+            output += f"💡 Why this works for you: {session['why_it_works']}\n\n"
+
+        output += f"✨ {day['encouragement']}\n\n"
+        output += "-" * 50 + "\n"
+        output += "Good luck today! — PlanMyRevision"
+        return output
+    except Exception as e:
+        return f"Error formatting today's sessions: {e}"
+
+def send_email(to_email, subject, body):
     response = requests.post(
         "https://api.resend.com/emails",
         headers={
@@ -48,8 +72,8 @@ def send_email(to_email, student_name, plan_text):
         json={
             "from": "PlanMyRevision <onboarding@resend.dev>",
             "to": [to_email],
-            "subject": f"📚 Your Personalised Revision Plan, {student_name}!",
-            "text": plan_text
+            "subject": subject,
+            "text": body
         }
     )
     return response.status_code == 200
@@ -136,7 +160,6 @@ SCHEDULING RULES:
     result = response.json()
     raw_content = result["choices"][0]["message"]["content"]
 
-    # Clean up markdown code blocks if present
     clean_content = raw_content.strip()
     if "```" in clean_content:
         parts = clean_content.split("```")
@@ -147,10 +170,8 @@ SCHEDULING RULES:
             if part.startswith("{"):
                 clean_content = part
                 break
-
     clean_content = clean_content.strip()
 
-    # Try to parse as JSON and format nicely
     formatted_plan = None
     plan_store = raw_content
 
@@ -159,12 +180,14 @@ SCHEDULING RULES:
         formatted_plan = format_plan_for_email(plan_json, student_name)
         plan_store = json.dumps(plan_json)
     except Exception:
-        # JSON parsing failed - send raw content but clean it up a bit
         formatted_plan = raw_content
 
-    # Send email
     if student_email and formatted_plan:
-        send_email(student_email, student_name, formatted_plan)
+        send_email(
+            student_email,
+            f"📚 Your Personalised Revision Plan, {student_name}!",
+            formatted_plan
+        )
 
     save_to_sheet(student_name, student_email, reminders, plan_store)
 
@@ -175,6 +198,47 @@ SCHEDULING RULES:
         "student_name": student_name,
         "student_email": student_email
     })
+
+@app.route('/todays-sessions', methods=['POST'])
+def todays_sessions():
+    data = request.json
+    student_name = clean(data.get('name', 'Student'))
+    student_email = clean(data.get('email', ''))
+    plan_json_str = data.get('plan_json', '')
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    try:
+        plan_json = json.loads(plan_json_str)
+        today_day = None
+        for day in plan_json.get("plan", []):
+            if day.get("date") == today_str:
+                today_day = day
+                break
+
+        if not today_day:
+            return jsonify({
+                "status": "no_session",
+                "message": f"No session found for today ({today_str})"
+            })
+
+        formatted = format_todays_sessions(today_day, student_name)
+
+        if student_email:
+            send_email(
+                student_email,
+                f"📚 Today's Revision Sessions — {today_day['day']}",
+                formatted
+            )
+
+        return jsonify({
+            "status": "success",
+            "todays_plan": formatted,
+            "date": today_str
+        })
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
 @app.route('/health', methods=['GET'])
 def health():
