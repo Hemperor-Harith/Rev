@@ -70,7 +70,7 @@ def send_email(to_email, subject, body):
             "Content-Type": "application/json"
         },
         json={
-            "from": "PlanMyRevision <onboarding@resend.dev>",
+            "from": "PlanMyRevision <hello@planmyrevision.com>",
             "to": [to_email],
             "subject": subject,
             "text": body
