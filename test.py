@@ -232,12 +232,13 @@ def call_openrouter(full_prompt):
             "Content-Type": "application/json"
         },
         json={
-            "model": "openrouter/free",
+            "model": "meta-llama/llama-3.3-70b-instruct:free",
             "messages": [
                 {"role": "system", "content": full_prompt},
                 {"role": "user", "content": "Please generate my personalised revision plan."}
             ],
-            "max_tokens": 16000
+            "max_tokens": 16000,
+            "reasoning": {"exclude": True}
         }
     )
     result = response.json()
