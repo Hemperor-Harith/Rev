@@ -224,27 +224,31 @@ SCHEDULING RULES:
 - Exam morning: 15 minute confidence session only
 """
 
-def call_openrouter(full_prompt):
+def call_gemini(full_prompt):
     response = requests.post(
-        url="https://openrouter.ai/api/v1/chat/completions",
+        url="https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
         headers={
-            "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}",
+            "x-goog-api-key": os.getenv('GEMINI_API_KEY'),
             "Content-Type": "application/json"
         },
         json={
-            "model": "meta-llama/llama-3.3-70b-instruct:free",
-            "messages": [
-                {"role": "system", "content": full_prompt},
-                {"role": "user", "content": "Please generate my personalised revision plan."}
+            "system_instruction": {
+                "parts": [{"text": full_prompt}]
+            },
+            "contents": [
+                {"role": "user", "parts": [{"text": "Please generate my personalised revision plan."}]}
             ],
-            "max_tokens": 16000,
-            "reasoning": {"exclude": True}
+            "generationConfig": {
+                "maxOutputTokens": 16000,
+                "responseMimeType": "application/json"
+            }
         }
     )
     result = response.json()
-    if "choices" not in result:
-        raise Exception(f"OpenRouter did not return a valid response (HTTP {response.status_code}). Full response: {json.dumps(result)}")
-    raw_content = result["choices"][0]["message"]["content"]
+    try:
+        raw_content = result["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError):
+        raise Exception(f"Gemini did not return a valid response (HTTP {response.status_code}). Full response: {json.dumps(result)}")
 
     clean_content = raw_content.strip()
     if "```" in clean_content:
@@ -290,7 +294,7 @@ TODAY'S DATE AND TIME CONTEXT:
 {build_student_profile_block(data)}
 """
 
-    plan_json, raw_fallback = call_openrouter(full_prompt)
+    plan_json, raw_fallback = call_gemini(full_prompt)
 
     if plan_json:
         html_email = format_plan_for_email_html(plan_json, student_name)
@@ -369,7 +373,7 @@ TODAY'S DATE AND TIME CONTEXT:
 {build_student_profile_block(data)}
 """
 
-    plan_json, raw_fallback = call_openrouter(full_prompt)
+    plan_json, raw_fallback = call_gemini(full_prompt)
 
     if plan_json:
         html_email = format_plan_for_email_html(plan_json, student_name)
