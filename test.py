@@ -232,7 +232,7 @@ def call_openrouter(full_prompt):
             "Content-Type": "application/json"
         },
         json={
-            "model": "openai/gpt-oss-120b:free",
+            "model": "openrouter/free",
             "messages": [
                 {"role": "system", "content": full_prompt},
                 {"role": "user", "content": "Please generate my personalised revision plan."}
