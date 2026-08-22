@@ -241,6 +241,8 @@ def call_openrouter(full_prompt):
         }
     )
     result = response.json()
+    if "choices" not in result:
+        raise Exception(f"OpenRouter did not return a valid response (HTTP {response.status_code}). Full response: {json.dumps(result)}")
     raw_content = result["choices"][0]["message"]["content"]
 
     clean_content = raw_content.strip()
