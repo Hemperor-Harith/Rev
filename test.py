@@ -107,46 +107,6 @@ def format_plan_for_email_text(plan_json, student_name):
     except Exception as e:
         return f"Plan generated but formatting failed: {e}"
 
-def format_todays_sessions_html(day, student_name):
-    if day.get("rest_day"):
-        body = f'<div class="rest-banner">🌟 Today is your rest day. No revision — rest is part of the plan. See you tomorrow!</div>'
-    else:
-        sessions_html = "".join(
-            render_session_html(s, i) for i, s in enumerate(day.get("sessions", []), 1)
-        )
-        body = f"""
-        <div class="day-meta">Total revision time: {day.get('total_mins','')} mins</div>
-        {sessions_html}
-        <div class="encouragement">✨ {day.get('encouragement','')}</div>
-        """
-    return f"""
-    <html><head>{EMAIL_STYLE}</head><body>
-    <div class="container">
-      <div class="header"><h1>📚 Today's Revision Sessions, {student_name}!</h1></div>
-      <div class="card">{body}</div>
-      <div class="footer">Good luck today! — PlanMyRevision</div>
-    </div>
-    </body></html>
-    """
-
-def format_todays_sessions_text(day, student_name):
-    try:
-        if day.get("rest_day"):
-            return f"Hi {student_name}! Today is your rest day. No revision — rest is part of the plan. See you tomorrow!"
-        output = f"Hi {student_name}! Here are your revision sessions for today:\n\n"
-        output += f"{day['day'].upper()} {day['date']}\n"
-        output += f"Total revision time: {day['total_mins']} mins\n\n"
-        for i, session in enumerate(day.get("sessions", []), 1):
-            output += f"SESSION {i} — {session['subject']} — {session['duration_mins']} mins\n"
-            output += f"Topic: {session['topic']}\n"
-            output += f"Technique: {session['technique']}\n"
-            output += f"Instructions: {session['instructions']}\n"
-            output += f"Why this works for you: {session['why_it_works']}\n\n"
-        output += f"{day['encouragement']}\n\nGood luck today! — PlanMyRevision"
-        return output
-    except Exception as e:
-        return f"Error formatting today's sessions: {e}"
-
 # ---------- EMAIL SENDING ----------
 
 def send_email(to_email, subject, text_body, html_body=None):
@@ -168,7 +128,7 @@ def send_email(to_email, subject, text_body, html_body=None):
     )
     return response.status_code == 200
 
-# ---------- SHEET STORAGE ----------
+# ---------- SHEET STORAGE (FIXED: NO FULL PLAN JSON) ----------
 
 def save_to_sheet(record):
     sheet_url = os.getenv('SHEET_WEBHOOK_URL', '')
@@ -265,7 +225,7 @@ def call_gemini(full_prompt):
     try:
         plan_json = json.loads(clean_content)
         return plan_json, None
-    except Exception as e:
+    except Exception:
         return None, raw_content
 
 @app.route('/generate-plan', methods=['POST'])
@@ -300,12 +260,10 @@ TODAY'S DATE AND TIME CONTEXT:
         html_email = format_plan_for_email_html(plan_json, student_name)
         text_email = format_plan_for_email_text(plan_json, student_name)
         last_plan_date = get_last_plan_date(plan_json)
-        plan_store = json.dumps(plan_json)
     else:
         html_email = None
         text_email = raw_fallback
         last_plan_date = ''
-        plan_store = raw_fallback
 
     if student_email:
         send_email(
@@ -315,11 +273,12 @@ TODAY'S DATE AND TIME CONTEXT:
             html_email
         )
 
+    # FIX: Do NOT store full plan JSON (too large for Sheets)
     save_to_sheet({
         "name": student_name,
         "email": student_email,
         "reminders": clean(data.get('reminders', 'no')),
-        "plan": plan_store,
+        "plan": "",  # FIXED
         "last_plan_date": last_plan_date,
         "date": datetime.now().strftime("%Y-%m-%d"),
         "year": clean(data.get('year', '')),
@@ -336,7 +295,6 @@ TODAY'S DATE AND TIME CONTEXT:
 
     return jsonify({
         "status": "success",
-        "plan_json": plan_store,
         "last_plan_date": last_plan_date,
         "student_name": student_name,
         "student_email": student_email
@@ -344,11 +302,6 @@ TODAY'S DATE AND TIME CONTEXT:
 
 @app.route('/continue-plan', methods=['POST'])
 def continue_plan():
-    """
-    Called by Make.com when a student's current plan chunk is about to run out.
-    Expects the same fields as /generate-plan, PLUS 'last_plan_date' (the last
-    date already covered by the previous chunk) pulled from the Google Sheet row.
-    """
     data = request.json
     student_name = clean(data.get('name', 'Student'))
     student_email = clean(data.get('email', ''))
@@ -379,12 +332,10 @@ TODAY'S DATE AND TIME CONTEXT:
         html_email = format_plan_for_email_html(plan_json, student_name)
         text_email = format_plan_for_email_text(plan_json, student_name)
         new_last_plan_date = get_last_plan_date(plan_json)
-        plan_store = json.dumps(plan_json)
     else:
         html_email = None
         text_email = raw_fallback
         new_last_plan_date = last_plan_date
-        plan_store = raw_fallback
 
     if student_email:
         send_email(
@@ -394,11 +345,12 @@ TODAY'S DATE AND TIME CONTEXT:
             html_email
         )
 
+    # FIX: Do NOT store full plan JSON
     save_to_sheet({
         "name": student_name,
         "email": student_email,
         "reminders": clean(data.get('reminders', 'no')),
-        "plan": plan_store,
+        "plan": "",  # FIXED
         "last_plan_date": new_last_plan_date,
         "date": datetime.now().strftime("%Y-%m-%d"),
         "year": clean(data.get('year', '')),
@@ -415,7 +367,6 @@ TODAY'S DATE AND TIME CONTEXT:
 
     return jsonify({
         "status": "success",
-        "plan_json": plan_store,
         "last_plan_date": new_last_plan_date,
         "student_name": student_name,
         "student_email": student_email
@@ -471,3 +422,4 @@ def health():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
