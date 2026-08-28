@@ -163,6 +163,62 @@ def send_email(to_email, subject, text_body, html_body=None):
     )
     return response.status_code == 200
 
+# ---------- BUDGET TRACKING & ALERTS ----------
+# Tracks estimated Claude API spend and emails an alert once a threshold is crossed.
+# NOTE: this uses a local file for persistence, which survives while the Render
+# instance stays up but resets on every redeploy. It's a best-effort safety net,
+# not a substitute for checking your actual balance at platform.claude.com —
+# but Anthropic will simply decline requests if your real balance runs out
+# (handled gracefully by the retry/fallback logic already in call_claude),
+# so you can never be charged more than what you've topped up.
+
+CLAUDE_INPUT_PRICE_PER_MTOK = 2.0    # Sonnet 5 pricing, update if you switch models
+CLAUDE_OUTPUT_PRICE_PER_MTOK = 10.0
+BUDGET_LIMIT_USD = float(os.getenv('BUDGET_LIMIT_USD', '2.00'))  # set this env var to match what you've topped up
+BUDGET_ALERT_THRESHOLD = 0.8  # send the email once 80% of budget is used
+ALERT_EMAIL = os.getenv('ALERT_EMAIL', '')  # your own email, to receive the top-up alert
+USAGE_TRACKING_FILE = '/tmp/pmr_usage_tracking.json'
+
+def _load_usage_state():
+    try:
+        with open(USAGE_TRACKING_FILE, 'r') as f:
+            return json.load(f)
+    except Exception:
+        return {"cumulative_cost_usd": 0.0, "alert_sent": False}
+
+def _save_usage_state(state):
+    try:
+        with open(USAGE_TRACKING_FILE, 'w') as f:
+            json.dump(state, f)
+    except Exception:
+        pass
+
+def track_usage_and_alert(input_tokens, output_tokens):
+    """Adds this call's real cost to the running total and emails an alert
+    the first time cumulative spend crosses BUDGET_ALERT_THRESHOLD of BUDGET_LIMIT_USD."""
+    cost = (input_tokens / 1_000_000 * CLAUDE_INPUT_PRICE_PER_MTOK) + \
+           (output_tokens / 1_000_000 * CLAUDE_OUTPUT_PRICE_PER_MTOK)
+
+    state = _load_usage_state()
+    state["cumulative_cost_usd"] = state.get("cumulative_cost_usd", 0.0) + cost
+    print(f"Claude usage: +${cost:.4f} this call, running total ~${state['cumulative_cost_usd']:.4f} / ${BUDGET_LIMIT_USD:.2f} budget (estimate)")
+
+    if not state.get("alert_sent") and state["cumulative_cost_usd"] >= BUDGET_LIMIT_USD * BUDGET_ALERT_THRESHOLD:
+        if ALERT_EMAIL:
+            send_email(
+                ALERT_EMAIL,
+                "⚠️ PlanMyRevision — API budget running low",
+                f"Estimated Claude API spend has reached ${state['cumulative_cost_usd']:.2f} of your "
+                f"${BUDGET_LIMIT_USD:.2f} budget ({int(BUDGET_ALERT_THRESHOLD*100)}% used). "
+                f"Time to top up your balance at platform.claude.com before plan generation starts failing.\n\n"
+                f"This is an estimate based on token counts, not your actual account balance — "
+                f"check platform.claude.com for the exact figure."
+            )
+        state["alert_sent"] = True
+
+    _save_usage_state(state)
+    return state["cumulative_cost_usd"]
+
 # ---------- SHEET STORAGE (FIXED: NO FULL PLAN JSON) ----------
 
 def save_to_sheet(record):
@@ -256,35 +312,36 @@ SCHEDULING RULES:
 
 import time
 
-GEMINI_MAX_ATTEMPTS = 3
-GEMINI_BACKOFF_BASE_SECONDS = 2  # 2s, 4s, 8s between attempts
+AI_MAX_ATTEMPTS = 3
+AI_BACKOFF_BASE_SECONDS = 2  # 2s, 4s, 8s between attempts
+CLAUDE_MODEL = "claude-sonnet-5"
 
-def _gemini_request_once(full_prompt):
-    """Makes a single Gemini API call. Returns (response, error_message)."""
+def _claude_request_once(full_prompt):
+    """Makes a single Claude API call. Returns (response, error_message)."""
     try:
         response = requests.post(
-            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
+            url="https://api.anthropic.com/v1/messages",
             headers={
-                "x-goog-api-key": os.getenv('GEMINI_API_KEY'),
+                "x-api-key": os.getenv('ANTHROPIC_API_KEY'),
+                "anthropic-version": "2023-06-01",
                 "Content-Type": "application/json"
             },
             json={
-                "system_instruction": {
-                    "parts": [{"text": full_prompt}]
-                },
-                "contents": [
-                    {"role": "user", "parts": [{"text": "Please generate my personalised revision plan."}]}
-                ],
-                "generationConfig": {
-                    "maxOutputTokens": 16000,
-                    "responseMimeType": "application/json"
-                }
+                "model": CLAUDE_MODEL,
+                "max_tokens": 8000,
+                "system": full_prompt,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Please generate my personalised revision plan. Respond with ONLY the raw JSON object — no markdown code fences, no explanation, no text before or after the JSON."
+                    }
+                ]
             },
             timeout=60
         )
         return response, None
     except requests.exceptions.RequestException as e:
-        return None, f"Network error calling Gemini: {e}"
+        return None, f"Network error calling Claude: {e}"
 
 def _extract_plan_json(raw_content):
     """Strips markdown fences if present and attempts to parse JSON.
@@ -313,31 +370,38 @@ def _extract_plan_json(raw_content):
 
     return plan_json, None
 
-def call_gemini(full_prompt):
+def call_claude(full_prompt):
     """
-    Calls Gemini with retry/backoff for transient failures (503 'high demand',
+    Calls Claude Sonnet with retry/backoff for transient failures (5xx errors,
     network errors, malformed/empty plan JSON). Returns (plan_json, raw_fallback).
     On success: (dict, None). On total failure: (None, best-effort raw text or error string).
     """
     last_raw_content = None
     last_failure_reason = None
 
-    for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
-        response, network_error = _gemini_request_once(full_prompt)
+    for attempt in range(1, AI_MAX_ATTEMPTS + 1):
+        response, network_error = _claude_request_once(full_prompt)
 
         if network_error:
             last_failure_reason = network_error
         else:
-            # Retry on 503 (overloaded) and other 5xx server errors
-            if response.status_code >= 500:
-                last_failure_reason = f"Gemini returned HTTP {response.status_code}"
+            # Retry on 429 (rate limit), 500, 502, 503, 529 (overloaded) etc.
+            if response.status_code == 429 or response.status_code >= 500:
+                last_failure_reason = f"Claude API returned HTTP {response.status_code}"
+            elif response.status_code != 200:
+                # Non-retryable client error (bad request, auth failure, etc.)
+                last_failure_reason = f"Claude API returned HTTP {response.status_code}. Full response: {response.text[:500]}"
+                break
             else:
                 try:
                     result = response.json()
-                    raw_content = result["candidates"][0]["content"]["parts"][0]["text"]
+                    usage = result.get('usage', {})
+                    if usage:
+                        track_usage_and_alert(usage.get('input_tokens', 0), usage.get('output_tokens', 0))
+                    raw_content = result["content"][0]["text"]
                     last_raw_content = raw_content
                 except (KeyError, IndexError, ValueError):
-                    last_failure_reason = f"Gemini did not return a valid response (HTTP {response.status_code}). Full response: {json.dumps(response.json() if response.content else {})}"
+                    last_failure_reason = f"Claude did not return a valid response (HTTP {response.status_code}). Full response: {json.dumps(response.json() if response.content else {})}"
                     raw_content = None
 
                 if raw_content:
@@ -347,11 +411,11 @@ def call_gemini(full_prompt):
                     last_failure_reason = parse_error
 
         # Not the last attempt yet — back off and retry
-        if attempt < GEMINI_MAX_ATTEMPTS:
-            time.sleep(GEMINI_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+        if attempt < AI_MAX_ATTEMPTS:
+            time.sleep(AI_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
 
     # All attempts exhausted — return whatever we have for the fallback email
-    return None, last_raw_content or f"Plan generation failed after {GEMINI_MAX_ATTEMPTS} attempts. Last error: {last_failure_reason}"
+    return None, last_raw_content or f"Plan generation failed after {AI_MAX_ATTEMPTS} attempts. Last error: {last_failure_reason}"
 
 @app.route('/generate-plan', methods=['POST'])
 def generate_plan():
@@ -379,7 +443,7 @@ TODAY'S DATE AND TIME CONTEXT:
 {build_student_profile_block(data)}
 """
 
-    plan_json, raw_fallback = call_gemini(full_prompt)
+    plan_json, raw_fallback = call_claude(full_prompt)
 
     if plan_json:
         html_email = format_plan_for_email_html(plan_json, student_name)
@@ -450,7 +514,7 @@ TODAY'S DATE AND TIME CONTEXT:
 {build_student_profile_block(data)}
 """
 
-    plan_json, raw_fallback = call_gemini(full_prompt)
+    plan_json, raw_fallback = call_claude(full_prompt)
 
     if plan_json:
         html_email = format_plan_for_email_html(plan_json, student_name)
