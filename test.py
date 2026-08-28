@@ -107,6 +107,41 @@ def format_plan_for_email_text(plan_json, student_name):
     except Exception as e:
         return f"Plan generated but formatting failed: {e}"
 
+def format_todays_sessions_html(today_day, student_name):
+    try:
+        day_html = render_day_html(today_day)
+        return f"""
+        <html><head>{EMAIL_STYLE}</head><body>
+        <div class="container">
+          <div class="header"><h1>📚 Today's Revision Sessions, {student_name}!</h1></div>
+          <div class="card">{day_html}</div>
+          <div class="footer">PlanMyRevision — helping you revise smarter, not harder.</div>
+        </div>
+        </body></html>
+        """
+    except Exception:
+        return None
+
+def format_todays_sessions_text(today_day, student_name):
+    try:
+        output = f"Hi {student_name}! Here are today's revision sessions:\n\n"
+        output += "=" * 50 + "\n\n"
+        output += f"{today_day['day'].upper()} {today_day['date']}\n"
+        if today_day.get("rest_day"):
+            output += "REST DAY — No revision today. Rest is part of the plan.\n\n"
+            return output
+        output += f"Total revision time: {today_day['total_mins']} mins\n\n"
+        for i, session in enumerate(today_day.get("sessions", []), 1):
+            output += f"SESSION {i} — {session['subject']} — {session['duration_mins']} mins\n"
+            output += f"Topic: {session['topic']}\n"
+            output += f"Technique: {session['technique']}\n"
+            output += f"Instructions: {session['instructions']}\n"
+            output += f"Why this works for you: {session['why_it_works']}\n\n"
+        output += f"{today_day.get('encouragement', '')}\n"
+        return output
+    except Exception as e:
+        return f"Today's sessions generated but formatting failed: {e}"
+
 # ---------- EMAIL SENDING ----------
 
 def send_email(to_email, subject, text_body, html_body=None):
@@ -138,6 +173,41 @@ def save_to_sheet(record):
         requests.post(sheet_url, json=record, timeout=5)
     except Exception:
         pass
+
+SHEETS_CELL_CHAR_LIMIT = 50000
+SHEETS_CELL_SAFE_LIMIT = 45000  # leave headroom below the hard 50,000 limit
+
+def compact_plan_for_storage(plan_json):
+    """
+    Serialises the plan to JSON with no whitespace (much smaller than the
+    default json.dumps output) so it fits in a single Google Sheets cell.
+    If it's still too big, progressively drops the least essential field
+    ('why_it_works') from each session rather than storing nothing —
+    this keeps /todays-sessions and /continue-plan working, just with a
+    slightly shorter explanation in the daily email.
+    Returns '' only as a last resort if the plan cannot be made to fit.
+    """
+    if not plan_json:
+        return ''
+
+    compact = json.dumps(plan_json, separators=(',', ':'))
+    if len(compact) <= SHEETS_CELL_SAFE_LIMIT:
+        return compact
+
+    # Too big — try dropping 'why_it_works' from every session to save space
+    import copy
+    trimmed = copy.deepcopy(plan_json)
+    for day in trimmed.get("plan", []):
+        for session in day.get("sessions", []):
+            session.pop("why_it_works", None)
+    compact = json.dumps(trimmed, separators=(',', ':'))
+    if len(compact) <= SHEETS_CELL_SAFE_LIMIT:
+        print(f"WARNING: plan trimmed (dropped why_it_works) to fit Sheets cell limit, final size {len(compact)} chars")
+        return compact
+
+    # Still too big — this should be rare given the 4-6 week PLAN_LENGTH_RULE cap
+    print(f"ERROR: plan still exceeds Sheets cell limit after trimming ({len(compact)} chars) — storing empty plan")
+    return ''
 
 def get_last_plan_date(plan_json):
     try:
@@ -328,12 +398,11 @@ TODAY'S DATE AND TIME CONTEXT:
             html_email
         )
 
-    # FIX: Do NOT store full plan JSON (too large for Sheets)
     save_to_sheet({
         "name": student_name,
         "email": student_email,
         "reminders": clean(data.get('reminders', 'no')),
-        "plan": "",  # FIXED
+        "plan": compact_plan_for_storage(plan_json),
         "last_plan_date": last_plan_date,
         "date": datetime.now().strftime("%Y-%m-%d"),
         "year": clean(data.get('year', '')),
@@ -400,12 +469,11 @@ TODAY'S DATE AND TIME CONTEXT:
             html_email
         )
 
-    # FIX: Do NOT store full plan JSON
     save_to_sheet({
         "name": student_name,
         "email": student_email,
         "reminders": clean(data.get('reminders', 'no')),
-        "plan": "",  # FIXED
+        "plan": compact_plan_for_storage(plan_json),
         "last_plan_date": new_last_plan_date,
         "date": datetime.now().strftime("%Y-%m-%d"),
         "year": clean(data.get('year', '')),
