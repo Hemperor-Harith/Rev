@@ -184,32 +184,41 @@ SCHEDULING RULES:
 - Exam morning: 15 minute confidence session only
 """
 
-def call_gemini(full_prompt):
-    response = requests.post(
-        url="https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
-        headers={
-            "x-goog-api-key": os.getenv('GEMINI_API_KEY'),
-            "Content-Type": "application/json"
-        },
-        json={
-            "system_instruction": {
-                "parts": [{"text": full_prompt}]
-            },
-            "contents": [
-                {"role": "user", "parts": [{"text": "Please generate my personalised revision plan."}]}
-            ],
-            "generationConfig": {
-                "maxOutputTokens": 16000,
-                "responseMimeType": "application/json"
-            }
-        }
-    )
-    result = response.json()
-    try:
-        raw_content = result["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError):
-        raise Exception(f"Gemini did not return a valid response (HTTP {response.status_code}). Full response: {json.dumps(result)}")
+import time
 
+GEMINI_MAX_ATTEMPTS = 3
+GEMINI_BACKOFF_BASE_SECONDS = 2  # 2s, 4s, 8s between attempts
+
+def _gemini_request_once(full_prompt):
+    """Makes a single Gemini API call. Returns (response, error_message)."""
+    try:
+        response = requests.post(
+            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
+            headers={
+                "x-goog-api-key": os.getenv('GEMINI_API_KEY'),
+                "Content-Type": "application/json"
+            },
+            json={
+                "system_instruction": {
+                    "parts": [{"text": full_prompt}]
+                },
+                "contents": [
+                    {"role": "user", "parts": [{"text": "Please generate my personalised revision plan."}]}
+                ],
+                "generationConfig": {
+                    "maxOutputTokens": 16000,
+                    "responseMimeType": "application/json"
+                }
+            },
+            timeout=60
+        )
+        return response, None
+    except requests.exceptions.RequestException as e:
+        return None, f"Network error calling Gemini: {e}"
+
+def _extract_plan_json(raw_content):
+    """Strips markdown fences if present and attempts to parse JSON.
+    Returns (plan_json, None) on success, or (None, error_reason) on failure."""
     clean_content = raw_content.strip()
     if "```" in clean_content:
         parts = clean_content.split("```")
@@ -224,9 +233,55 @@ def call_gemini(full_prompt):
 
     try:
         plan_json = json.loads(clean_content)
-        return plan_json, None
-    except Exception:
-        return None, raw_content
+    except Exception as e:
+        return None, f"JSON parse failed: {e}"
+
+    # Validate the plan actually has usable content before accepting it
+    days = plan_json.get("plan", []) if isinstance(plan_json, dict) else []
+    if not isinstance(days, list) or len(days) == 0:
+        return None, "Parsed JSON but 'plan' list was missing or empty"
+
+    return plan_json, None
+
+def call_gemini(full_prompt):
+    """
+    Calls Gemini with retry/backoff for transient failures (503 'high demand',
+    network errors, malformed/empty plan JSON). Returns (plan_json, raw_fallback).
+    On success: (dict, None). On total failure: (None, best-effort raw text or error string).
+    """
+    last_raw_content = None
+    last_failure_reason = None
+
+    for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
+        response, network_error = _gemini_request_once(full_prompt)
+
+        if network_error:
+            last_failure_reason = network_error
+        else:
+            # Retry on 503 (overloaded) and other 5xx server errors
+            if response.status_code >= 500:
+                last_failure_reason = f"Gemini returned HTTP {response.status_code}"
+            else:
+                try:
+                    result = response.json()
+                    raw_content = result["candidates"][0]["content"]["parts"][0]["text"]
+                    last_raw_content = raw_content
+                except (KeyError, IndexError, ValueError):
+                    last_failure_reason = f"Gemini did not return a valid response (HTTP {response.status_code}). Full response: {json.dumps(response.json() if response.content else {})}"
+                    raw_content = None
+
+                if raw_content:
+                    plan_json, parse_error = _extract_plan_json(raw_content)
+                    if plan_json:
+                        return plan_json, None  # Success — solid plan returned
+                    last_failure_reason = parse_error
+
+        # Not the last attempt yet — back off and retry
+        if attempt < GEMINI_MAX_ATTEMPTS:
+            time.sleep(GEMINI_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+
+    # All attempts exhausted — return whatever we have for the fallback email
+    return None, last_raw_content or f"Plan generation failed after {GEMINI_MAX_ATTEMPTS} attempts. Last error: {last_failure_reason}"
 
 @app.route('/generate-plan', methods=['POST'])
 def generate_plan():
@@ -422,4 +477,3 @@ def health():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
