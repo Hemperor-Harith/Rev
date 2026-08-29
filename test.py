@@ -328,7 +328,8 @@ def _claude_request_once(full_prompt):
             },
             json={
                 "model": CLAUDE_MODEL,
-                "max_tokens": 8000,
+                "max_tokens": 16000,  # ceiling only — you're billed for tokens actually generated, not this cap. A realistic 5-6 week plan can run close to 8-9k tokens compact, so this just prevents truncation on longer plans; a normal plan still costs the same as before.
+                "thinking": {"type": "disabled"},  # without this, the model was spending its entire token budget "thinking" and never writing the actual plan
                 "system": full_prompt,
                 "messages": [
                     {
@@ -398,8 +399,16 @@ def call_claude(full_prompt):
                     usage = result.get('usage', {})
                     if usage:
                         track_usage_and_alert(usage.get('input_tokens', 0), usage.get('output_tokens', 0))
-                    raw_content = result["content"][0]["text"]
-                    last_raw_content = raw_content
+                    # Find the actual text block rather than assuming content[0] is it —
+                    # a thinking block (if one ever appears) would sit before it.
+                    text_blocks = [b.get("text", "") for b in result.get("content", []) if b.get("type") == "text"]
+                    raw_content = text_blocks[0] if text_blocks else None
+                    if raw_content:
+                        last_raw_content = raw_content
+                    elif result.get("stop_reason") == "max_tokens":
+                        last_failure_reason = "Claude used its entire token budget without producing any output text (stop_reason: max_tokens)"
+                    else:
+                        last_failure_reason = f"Claude response had no text content block. stop_reason: {result.get('stop_reason')}"
                 except (KeyError, IndexError, ValueError):
                     last_failure_reason = f"Claude did not return a valid response (HTTP {response.status_code}). Full response: {json.dumps(response.json() if response.content else {})}"
                     raw_content = None
