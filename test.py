@@ -337,7 +337,7 @@ def _claude_request_once(full_prompt):
                     }
                 ]
             },
-            timeout=60
+            timeout=180  # a full 4-6 week plan at max_tokens=8000 can genuinely take 90-160s+ to generate
         )
         return response, None
     except requests.exceptions.RequestException as e:
@@ -488,12 +488,49 @@ TODAY'S DATE AND TIME CONTEXT:
         "student_email": student_email
     })
 
+CONTINUE_LOOKUP_WEBHOOK_URL = os.getenv('CONTINUE_LOOKUP_WEBHOOK_URL', '')
+
+def lookup_last_plan_date(email):
+    """
+    Looks up a student's most recent last_plan_date by email via the
+    'Continue Plan - Lookup' Make scenario. Returns (last_plan_date, found).
+    On any failure (network error, webhook not configured, no match),
+    returns ('', False) so the caller can respond with a clear error
+    instead of silently generating a wrong plan.
+    """
+    if not CONTINUE_LOOKUP_WEBHOOK_URL or not email:
+        return '', False
+    try:
+        response = requests.post(
+            CONTINUE_LOOKUP_WEBHOOK_URL,
+            json={"email": email},
+            timeout=30
+        )
+        result = response.json()
+        if result.get("found") and result.get("last_plan_date"):
+            return result["last_plan_date"], True
+        return '', False
+    except Exception as e:
+        print(f"ERROR: lookup_last_plan_date failed for {email}: {e}")
+        return '', False
+
 @app.route('/continue-plan', methods=['POST'])
 def continue_plan():
     data = request.json
     student_name = clean(data.get('name', 'Student'))
     student_email = clean(data.get('email', ''))
     last_plan_date = clean(data.get('last_plan_date', ''))
+
+    # If last_plan_date wasn't supplied directly (e.g. a student submitting
+    # the "Continue My Plan" form themselves, rather than the Daily Reminders
+    # Make scenario which already reads it from Sheets), look it up by email.
+    if not last_plan_date:
+        last_plan_date, found = lookup_last_plan_date(student_email)
+        if not found:
+            return jsonify({
+                "status": "not_found",
+                "message": "No existing plan found for this email. Please use the 'First plan' option instead."
+            }), 404
 
     with open("prompt.txt", "r") as f:
         base_prompt = f.read()
