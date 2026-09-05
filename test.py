@@ -613,9 +613,17 @@ def todays_sessions():
     plan_json_str = data.get('plan_json', '')
 
     today_str = datetime.now().strftime("%Y-%m-%d")
+    print(f"[todays-sessions] Checking {student_email} — server today={today_str}, plan_json length={len(plan_json_str)}")
 
     try:
+        if not plan_json_str:
+            print(f"[todays-sessions] {student_email}: plan_json is empty — likely an old pre-fix Sheets row")
+            return jsonify({"status": "error", "message": "plan_json was empty"})
+
         plan_json = json.loads(plan_json_str)
+        all_dates = [day.get("date") for day in plan_json.get("plan", [])]
+        print(f"[todays-sessions] {student_email}: plan contains {len(all_dates)} days, dates={all_dates}")
+
         today_day = None
         for day in plan_json.get("plan", []):
             if day.get("date") == today_str:
@@ -623,11 +631,13 @@ def todays_sessions():
                 break
 
         if not today_day:
+            print(f"[todays-sessions] {student_email}: no day matched today_str={today_str} against the dates above")
             return jsonify({
                 "status": "no_session",
                 "message": f"No session found for today ({today_str})"
             })
 
+        print(f"[todays-sessions] {student_email}: MATCH found for {today_str}, sending email now")
         html_body = format_todays_sessions_html(today_day, student_name)
         text_body = format_todays_sessions_text(today_day, student_name)
 
@@ -638,6 +648,7 @@ def todays_sessions():
                 text_body,
                 html_body
             )
+            print(f"[todays-sessions] {student_email}: send_email() called successfully")
 
         return jsonify({
             "status": "success",
@@ -646,6 +657,7 @@ def todays_sessions():
         })
 
     except Exception as e:
+        print(f"[todays-sessions] {student_email}: EXCEPTION — {e}")
         return jsonify({"status": "error", "message": str(e)})
 
 @app.route('/health', methods=['GET'])
