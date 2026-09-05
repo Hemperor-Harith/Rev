@@ -610,14 +610,14 @@ def todays_sessions():
     data = request.json
     student_name = clean(data.get('name', 'Student'))
     student_email = clean(data.get('email', ''))
-    plan_json_str = data.get('plan_json', '')
+    plan_json_str = data.get('plan_json') or ''  # `or ''` catches an explicit null, not just a missing key
 
     today_str = datetime.now().strftime("%Y-%m-%d")
     print(f"[todays-sessions] Checking {student_email} — server today={today_str}, plan_json length={len(plan_json_str)}")
 
     try:
         if not plan_json_str:
-            print(f"[todays-sessions] {student_email}: plan_json is empty — likely an old pre-fix Sheets row")
+            print(f"[todays-sessions] {student_email}: plan_json is empty/null — likely an old pre-fix Sheets row, or this row's Plan cell is genuinely blank")
             return jsonify({"status": "error", "message": "plan_json was empty"})
 
         plan_json = json.loads(plan_json_str)
